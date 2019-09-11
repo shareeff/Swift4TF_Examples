@@ -2,6 +2,11 @@
 
 This is a swift for tensorflow implementation of Cycle-Consistent Adversarial Networks (CycleGAN)
 
+# Update
+
+There is a memory leak in this implementation. Use 
+[CycleGAN_V01] https://github.com/shareeff/Swift4TF_Examples/tree/master/CycleGAN_V01 
+
 
 # Original Paper
 
