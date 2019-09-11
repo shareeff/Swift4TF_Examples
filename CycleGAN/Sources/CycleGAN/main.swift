@@ -70,6 +70,80 @@ func saveImageGrid(_ testImage: Tensor<Float>, name: String) throws {
         name: name)
 }
 
+func train(minibatchA: Tensor<Float>, minibatchB: Tensor<Float>) -> (lossGA2B: Tensor<Float>, lossGB2A: Tensor<Float>, 
+                                            lossDiscA: Tensor<Float>, lossDiscB: Tensor<Float>){
+
+    Context.local.learningPhase = .training
+
+    let genA2BOutput = genA2B(minibatchA)
+    let genB2AOutput = genB2A(minibatchB)
+
+    let reconstructedA = genB2A(genA2BOutput)
+    let reconstructedB = genA2B(genB2AOutput)
+
+    let discAFakeOutput = discA(genB2AOutput)
+    let discBFakeOutput = discB(genA2BOutput)
+
+
+    let (lossGA2B, 𝛁genA2B) = genA2B.valueWithGradient { genA2B -> Tensor<Float> in
+            
+        let loss = generatorLoss(fakeLogits: discBFakeOutput) + 
+                cycleConsistencyLoss(dataA: minibatchA,  dataB: minibatchB, reconstructedDataA: reconstructedA, 
+                    reconstructedDataB: reconstructedB, cycLambda: cycLambda) + 
+                identityLoss(dataA: minibatchA, dataB: minibatchB,
+                    genA2BOutput: genA2BOutput, genB2AOutput: genB2AOutput, identityLambda: identityLambda)
+
+            return loss
+        }
+        
+        optGenA2B.update(&genA2B, along: 𝛁genA2B)
+        
+
+        let (lossGB2A, 𝛁genB2A) = genB2A.valueWithGradient { genB2A -> Tensor<Float> in
+
+            let loss = generatorLoss(fakeLogits: discAFakeOutput) + 
+                cycleConsistencyLoss(dataA: minibatchA,  dataB: minibatchB, reconstructedDataA: reconstructedA, 
+                    reconstructedDataB: reconstructedB, cycLambda: cycLambda) + 
+                identityLoss(dataA: minibatchA, dataB: minibatchB,
+                    genA2BOutput: genA2BOutput, genB2AOutput: genB2AOutput, identityLambda: identityLambda)
+
+            return loss
+
+        }
+        
+        optGenB2A.update(&genB2A, along: 𝛁genB2A)
+        
+        let genA2BFakeOutput = genA2B(minibatchA)
+        let genB2AFakeOutput = genB2A(minibatchB)
+       
+
+        let (lossDiscA, 𝛁discA) = discA.valueWithGradient { discA -> Tensor<Float> in 
+
+            let discARealOutput = discA(minibatchA)
+            let discAFakeOutput = discA(genB2AFakeOutput)
+            let loss = discriminatorLoss(realLogits: discARealOutput, fakeLogits: discAFakeOutput)
+            return loss
+        }
+
+        optDiscA.update(&discA, along: 𝛁discA)
+
+        let (lossDiscB, 𝛁discB) = discB.valueWithGradient { discB -> Tensor<Float> in
+
+            let discBRealOutput = discB(minibatchB)
+            let discBFakeOutput = discB(genA2BFakeOutput)
+            let loss = discriminatorLoss(realLogits: discBRealOutput, fakeLogits: discBFakeOutput)
+            return loss
+        }
+
+        optDiscB.update(&discB, along: 𝛁discB)
+
+    
+
+    return (lossGA2B, lossGB2A, lossDiscA, lossDiscB)
+
+
+}
+
 
 print("Start training...")
 
@@ -85,86 +159,23 @@ for epoch in 0...epochCount {
 
     var lossGenA2B: Tensor<Float> = Tensor<Float>(zeros: [1])
     var lossGenB2A: Tensor<Float> = Tensor<Float>(zeros: [1])
+    var lossDiscA: Tensor<Float> = Tensor<Float>(zeros: [1])
+    var lossDiscB: Tensor<Float> = Tensor<Float>(zeros: [1])
 
     for (batchA, batchB) in zip(trainingAShuffled.batched(batchSize), trainingBShuffled.batched(batchSize)){
-        let imagesA = batchA.data
-        let imagesB = batchB.data
 
-        //assert(imagesA.shape == imagesB.shape, "imageA (\(imagesA.shape)) and imageB (\(imagesB.shape)) batchSize missmatch")
-
-        if imagesA.shape != imagesB.shape {
+        if batchA.data.shape != batchB.data.shape {
             break
         }
-
-        let genA2BOutput = genA2B(imagesA)
-        let genB2AOutput = genB2A(imagesB)
-
-        let reconstructedA = genB2A(genA2BOutput)
-        let reconstructedB = genA2B(genB2AOutput)
-
-        let discAFakeOutput = discA(genB2AOutput)
-        let discBFakeOutput = discB(genA2BOutput)
-
-
-        let (lossGA2B, 𝛁genA2B) = genA2B.valueWithGradient { genA2B -> Tensor<Float> in
-            
-            let loss = generatorLoss(fakeLogits: discBFakeOutput) + 
-                cycleConsistencyLoss(dataA: imagesA,  dataB: imagesB, reconstructedDataA: reconstructedA, 
-                    reconstructedDataB: reconstructedB, cycLambda: cycLambda) + 
-                    identityLoss(dataA: imagesA, dataB: imagesB,
-                        genA2BOutput: genA2BOutput, genB2AOutput: genB2AOutput, identityLambda: identityLambda)
-
-            return loss
-        }
-        
-        optGenA2B.update(&genA2B, along: 𝛁genA2B)
+        let (lossGA2B, lossGB2A, lossDA, lossDB) = train(minibatchA: batchA.data, minibatchB: batchB.data)
         lossGenA2B = lossGenA2B.concatenated(with: lossGA2B.expandingShape(at:0))
-
-        let (lossGB2A, 𝛁genB2A) = genB2A.valueWithGradient { genB2A -> Tensor<Float> in
-
-            let loss = generatorLoss(fakeLogits: discAFakeOutput) + 
-                cycleConsistencyLoss(dataA: imagesA,  dataB: imagesB, reconstructedDataA: reconstructedA, 
-                    reconstructedDataB: reconstructedB, cycLambda: cycLambda) + 
-                    identityLoss(dataA: imagesA, dataB: imagesB,
-                        genA2BOutput: genA2BOutput, genB2AOutput: genB2AOutput, identityLambda: identityLambda)
-
-            return loss
-
-        }
-        
-        optGenB2A.update(&genB2A, along: 𝛁genB2A)
         lossGenB2A = lossGenB2A.concatenated(with: lossGB2A.expandingShape(at:0))
-
-        let genA2BFakeOutput = genA2B(imagesA)
-        let genB2AFakeOutput = genB2A(imagesB)
-       
-
-        let 𝛁discA = discA.gradient { discA -> Tensor<Float> in 
-
-            let discARealOutput = discA(imagesA)
-            let discAFakeOutput = discA(genB2AFakeOutput)
-            let loss = discriminatorLoss(realLogits: discARealOutput, fakeLogits: discAFakeOutput)
-            return loss
-        }
-
-        optDiscA.update(&discA, along: 𝛁discA)
-
-        let 𝛁discB = discB.gradient { discB -> Tensor<Float> in
-
-            let discBRealOutput = discB(imagesB)
-            let discBFakeOutput = discB(genA2BFakeOutput)
-            let loss = discriminatorLoss(realLogits: discBRealOutput, fakeLogits: discBFakeOutput)
-            return loss
-        }
-
-        optDiscB.update(&discB, along: 𝛁discB)
+        lossDiscA = lossDiscA.concatenated(with: lossDA.expandingShape(at:0))
+        lossDiscB = lossDiscB.concatenated(with: lossDB.expandingShape(at:0))
 
     }
 
-    // Start inference phase.
-    Context.local.learningPhase = .inference
-
-   
+    print("[Epoch: \(epoch)] Loss-GenA: \(lossGenA2B.mean()) Loss-GenB: \(lossGenB2A.mean()) Loss-DiscA: \(lossDiscA.mean()) Loss-DiscB: \(lossDiscB.mean())")
 
     if Int(epoch) % 10 == 0 {
         let testA = ittTestA.next()! 
@@ -187,7 +198,7 @@ for epoch in 0...epochCount {
         }
     }
 
-    print("[Epoch: \(epoch)] Loss-GenA: \(lossGenA2B.mean()) Loss-GenB: \(lossGenB2A.mean())")
+    
 
     
 }
