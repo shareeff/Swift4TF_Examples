@@ -4,11 +4,12 @@ import TensorFlow
 
 
 let learningRate: Float = 0.0002
-let batchSize = 16
+let batchSize = 4
 let testBachSize = 1
 let imgSize = 256
 let cycLambda: Float = 10
-let identityLambda: Float = 5
+let identityLambda: Float = 0.1
+let beta1: Float = 0.5
 let epochCount = 1000
 //let outputFolder = Path.cwd/"Output"
 let outputFolder = "./output/"
@@ -29,10 +30,10 @@ var discB = Discriminator()
 var genA2B = Generator()
 var genB2A = Generator()
 
-let optDiscA = Adam(for: discA, learningRate: learningRate, beta1: 0.5)
-let optDiscB = Adam(for: discB, learningRate: learningRate, beta1: 0.5)
-let optGenA2B = Adam(for: genA2B, learningRate: learningRate, beta1: 0.5)
-let optGenB2A = Adam(for: genB2A, learningRate: learningRate, beta1: 0.5)
+let optDiscA = Adam(for: discA, learningRate: learningRate, beta1: beta1)
+let optDiscB = Adam(for: discB, learningRate: learningRate, beta1: beta1)
+let optGenA2B = Adam(for: genA2B, learningRate: learningRate, beta1: beta1)
+let optGenB2A = Adam(for: genB2A, learningRate: learningRate, beta1: beta1)
 
 func saveImageGrid(_ testImage: Tensor<Float>, name: String) throws {
     assert(testImage.shape.count == 4, "Image tensor should have 4 dim")
@@ -63,76 +64,61 @@ func saveImageGrid(_ testImage: Tensor<Float>, name: String) throws {
         name: name)
 }
 
-func train(minibatchA: Tensor<Float>, minibatchB: Tensor<Float>, step: Int) -> (lossGA2B: Tensor<Float>, lossGB2A: Tensor<Float>, 
-                                            lossDiscA: Tensor<Float>, lossDiscB: Tensor<Float>){
+func train(minibatchA: Tensor<Float>, minibatchB: Tensor<Float>, step: Int) -> (lossG: Tensor<Float>, lossD: Tensor<Float>){
 
     Context.local.learningPhase = .training
+    assert(minibatchA.shape == minibatchB.shape, "imageA (\(minibatchA.shape)) and imageB (\(minibatchB.shape)) batchSize missmatch")
 
-    let genA2BOutput = genA2B(minibatchA)
-    let genB2AOutput = genB2A(minibatchB)
+    let (lossG, (𝛁genA2B, 𝛁genB2A)) = valueWithGradient(at: genA2B, genB2A){ 
+        genA2B, genB2A -> Tensor<Float> in
+        let genA2BOutput = genA2B(minibatchA)
+        let genB2AOutput = genB2A(minibatchB)
 
-    let reconstructedA = genB2A(genA2BOutput)
-    let reconstructedB = genA2B(genB2AOutput)
+        let reconstructedA = genB2A(genA2BOutput)
+        let reconstructedB = genA2B(genB2AOutput)
 
-    let discAFakeOutput = discA(genB2AOutput)
-    let discBFakeOutput = discB(genA2BOutput)
+        let discAFakeOutput = discA(genB2AOutput)
+        let discBFakeOutput = discB(genA2BOutput)
 
-
-    let (lossGA2B, 𝛁genA2B) = genA2B.valueWithGradient { genA2B -> Tensor<Float> in
-            
-        let loss = generatorLoss(fakeLogits: discBFakeOutput) + 
+        let loss = generatorLoss(fakeLogits: discBFakeOutput) + generatorLoss(fakeLogits: discAFakeOutput) +
                 cycleConsistencyLoss(dataA: minibatchA,  dataB: minibatchB, reconstructedDataA: reconstructedA, 
                     reconstructedDataB: reconstructedB, cycLambda: cycLambda) + 
                 identityLoss(dataA: minibatchA, dataB: minibatchB,
                     genA2BOutput: genA2BOutput, genB2AOutput: genB2AOutput, identityLambda: identityLambda)
 
-            return loss
-        }
+        return loss
+
+    }
+
+   
+    optGenA2B.update(&genA2B, along: 𝛁genA2B)
+
+    optGenB2A.update(&genB2A, along: 𝛁genB2A)
+
+    let genA2BFakeOutput = genA2B(minibatchA)
+    let genB2AFakeOutput = genB2A(minibatchB)
+
+    let (lossD, (𝛁discA, 𝛁discB)) = valueWithGradient(at: discA, discB){
+        discA, discB -> Tensor<Float> in
+        let discARealOutput = discA(minibatchA)
+        let discAFakeOutput = discA(genB2AFakeOutput)
+        let discBRealOutput = discB(minibatchB)
+        let discBFakeOutput = discB(genA2BFakeOutput)
+
+        let loss = discriminatorLoss(realLogits: discARealOutput, fakeLogits: discAFakeOutput) + 
+                        discriminatorLoss(realLogits: discBRealOutput, fakeLogits: discBFakeOutput)
+
+        return loss
+
+    }
         
-        optGenA2B.update(&genA2B, along: 𝛁genA2B)
-        
-
-        let (lossGB2A, 𝛁genB2A) = genB2A.valueWithGradient { genB2A -> Tensor<Float> in
-
-            let loss = generatorLoss(fakeLogits: discAFakeOutput) + 
-                cycleConsistencyLoss(dataA: minibatchA,  dataB: minibatchB, reconstructedDataA: reconstructedA, 
-                    reconstructedDataB: reconstructedB, cycLambda: cycLambda) + 
-                identityLoss(dataA: minibatchA, dataB: minibatchB,
-                    genA2BOutput: genA2BOutput, genB2AOutput: genB2AOutput, identityLambda: identityLambda)
-
-            return loss
-
-        }
-        
-        optGenB2A.update(&genB2A, along: 𝛁genB2A)
-        
-        let genA2BFakeOutput = genA2B(minibatchA)
-        let genB2AFakeOutput = genB2A(minibatchB)
-       
-
-        let (lossDiscA, 𝛁discA) = discA.valueWithGradient { discA -> Tensor<Float> in 
-
-            let discARealOutput = discA(minibatchA)
-            let discAFakeOutput = discA(genB2AFakeOutput)
-            let loss = discriminatorLoss(realLogits: discARealOutput, fakeLogits: discAFakeOutput)
-            return loss
-        }
-
-        optDiscA.update(&discA, along: 𝛁discA)
-
-        let (lossDiscB, 𝛁discB) = discB.valueWithGradient { discB -> Tensor<Float> in
-
-            let discBRealOutput = discB(minibatchB)
-            let discBFakeOutput = discB(genA2BFakeOutput)
-            let loss = discriminatorLoss(realLogits: discBRealOutput, fakeLogits: discBFakeOutput)
-            return loss
-        }
-
-        optDiscB.update(&discB, along: 𝛁discB)
+    
+    optDiscB.update(&discB, along: 𝛁discB)
+    optDiscA.update(&discA, along: 𝛁discA)
 
     
 
-    return (lossGA2B, lossGB2A, lossDiscA, lossDiscB)
+    return (lossG, lossD)
 
 
 }
@@ -152,9 +138,9 @@ for step in 1... {
     let minibatchA = trainImageLoaderA.minibatch(size: batchSize, imageSize: (imgSize, imgSize))
     let minibatchB = trainImageLoaderB.minibatch(size: batchSize, imageSize: (imgSize, imgSize))
 
-    let (lossGA2B, lossGB2A, lossDiscA, lossDiscB) = train(minibatchA: minibatchA, minibatchB: minibatchB, step: step)
+    let (lossG, lossD) = train(minibatchA: minibatchA, minibatchB: minibatchB, step: step)
 
-    print("[Setp: \(step)] Loss-GenA: \(lossGA2B) Loss-GenB: \(lossGB2A) Loss-DiscA: \(lossDiscA) Loss-DiscB: \(lossDiscB)")
+    print("[Step: \(step)] Loss-G: \(lossG) Loss-D: \(lossD)")
 
     if step % 1000 == 0 {
        
