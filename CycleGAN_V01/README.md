@@ -15,6 +15,14 @@ The code will download the horse2zebra dataset automatically.
 swift run 
 ```
 
+# Results
+
+![1000 stepts](/output/horse2zebra_step_1000.jpg)
+
+![10000 steps](/output/horse2zebra_step_10000.jpg)
+
+![20000 steps](/output/horse2zebra_step_20000.jpg)
+
 #  Reference
 
 [1] https://github.com/dragen1860/TensorFlow-2.x-Tutorials/tree/master/15-CycleGAN
