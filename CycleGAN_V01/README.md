@@ -17,11 +17,11 @@ swift run
 
 # Results
 
-![1000 stepts](/output/horse2zebra_step_1000.jpg)
+![1000 stepts](./output/horse2zebra_step_1000.jpg)
 
-![10000 steps](/output/horse2zebra_step_10000.jpg)
+![10000 steps](./output/horse2zebra_step_10000.jpg)
 
-![20000 steps](/output/horse2zebra_step_20000.jpg)
+![20000 steps](./output/horse2zebra_step_20000.jpg)
 
 #  Reference
 
