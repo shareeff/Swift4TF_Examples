@@ -17,10 +17,13 @@ swift run
 
 # Results
 
+After 1000 steps
 ![1000 stepts](./output/horse2zebra_step_1000.jpg)
 
+After 10000 steps
 ![10000 steps](./output/horse2zebra_step_10000.jpg)
 
+After 20000 steps
 ![20000 steps](./output/horse2zebra_step_20000.jpg)
 
 #  Reference
